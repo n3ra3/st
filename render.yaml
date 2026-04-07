@@ -1,0 +1,60 @@
+services:
+  - type: worker
+    name: steamnote-bot
+    env: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: SKINS_TABLE_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TIMEZONE
+        value: Europe/Chisinau
+      - key: POLL_MINUTES
+        value: "10"
+      - key: APP_ID
+        value: "730"
+      - key: SITE
+        value: STEAM
+      - key: COMPARE_WITH_STEAM_ORDER
+        value: "1"
+      - key: ONLY_BELOW_STEAM_ORDER
+        value: "1"
+      - key: STEAM_ORDER_SITE
+        value: STEAM ORDER
+      - key: COMPARE_WITH_PIRATESWAP
+        value: "1"
+      - key: PIRATESWAP_SITE
+        value: PIRATESWAP
+      - key: COMPARE_WITH_MARKET
+        value: "0"
+      - key: ACTIVE_START
+        value: "10:00"
+      - key: ACTIVE_END
+        value: "00:59"
+      - key: SEND_SCHEDULE_NOTICES
+        value: "1"
+      - key: ANALYSIS_START_NOTICE_TIME
+        value: "09:59"
+      - key: ANALYSIS_END_NOTICE_TIME
+        value: "00:59"
+      - key: ANALYSIS_START_NOTICE_TEXT
+        value: Начало анализа рынка
+      - key: ANALYSIS_END_NOTICE_TEXT
+        value: Торги закончились
+      - key: MIN_STEAM_N
+        value: "1"
+      - key: MIN_STEAM_ORDER_N
+        value: "1"
+      - key: MAX_ITEMS
+        value: "30"
+      - key: REQUEST_TIMEOUT_SECONDS
+        value: "25"
+      - key: MOCK_API
+        value: "0"
+      - key: RUN_ONCE
+        value: "0"
