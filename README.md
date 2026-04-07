@@ -14,6 +14,7 @@ Bot requests data from skins-table.com, filters only knives by symbol `★`, bui
 - MARKET comparison: optional extra comparison in $ and %
 - Optional filter to keep only knives below MARKET
 - Duplicate protection (won't resend same list every cycle)
+- Telegram command `/status` with pretty bot state output
 
 ## Setup
 
@@ -47,6 +48,8 @@ Bot requests data from skins-table.com, filters only knives by symbol `★`, bui
 - `ANALYSIS_END_NOTICE_TIME=00:59`
 - `ANALYSIS_START_NOTICE_TEXT=Market analysis started.`
 - `ANALYSIS_END_NOTICE_TEXT=Trading session is finished.`
+- `ENABLE_TELEGRAM_COMMANDS=1`
+- `COMMAND_POLL_SECONDS=30`
 - `MIN_STEAM_N=1`
 - `MIN_STEAM_ORDER_N=1`
 - `SITE=STEAM`
@@ -132,6 +135,30 @@ Run container with your env file:
 ```bash
 docker run --rm --env-file .env steamnote-bot
 ```
+
+## Quick status command
+
+You can check whether the bot is currently active or sleeping and see time until next start:
+
+```bash
+python bot.py status
+```
+
+## Telegram status command
+
+When the bot is running, send this command in your Telegram group/chat:
+
+```text
+/status
+```
+
+Bot replies with a formatted status card: current state (ACTIVE/SLEEPING), next start countdown, and notice countdowns.
+
+Requirements:
+
+- `ENABLE_TELEGRAM_COMMANDS=1`
+- Bot must be in the same chat as `TELEGRAM_CHAT_ID`
+- Bot needs permission to read messages in that chat
 
 ### Main Render env vars
 

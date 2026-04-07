@@ -3,9 +3,11 @@ import html
 import json
 import logging
 import os
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -15,6 +17,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 API_URL = "https://skins-table.com/api_v2/items"
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_UPDATES_URL = "https://api.telegram.org/bot{token}/getUpdates"
+ENV_FILE = Path(__file__).with_name(".env")
 
 
 @dataclass
@@ -41,6 +45,8 @@ class Config:
     analysis_end_notice_time: dt_time
     analysis_start_notice_text: str
     analysis_end_notice_text: str
+    enable_telegram_commands: bool
+    command_poll_seconds: int
     active_start: dt_time
     active_end: dt_time
     min_steam_n: int
@@ -87,7 +93,7 @@ def parse_bool(value: str | None, default: bool = False) -> bool:
 
 
 def load_config() -> Config:
-    load_dotenv(override=True)
+    load_dotenv(dotenv_path=ENV_FILE, override=True)
 
     api_key = os.getenv("SKINS_TABLE_API_KEY", "").strip()
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -134,6 +140,8 @@ def load_config() -> Config:
             "ANALYSIS_END_NOTICE_TEXT",
             "Trading session is finished.",
         ).strip(),
+        enable_telegram_commands=parse_bool(os.getenv("ENABLE_TELEGRAM_COMMANDS", "1")),
+        command_poll_seconds=int(os.getenv("COMMAND_POLL_SECONDS", "30")),
         active_start=parse_hhmm(os.getenv("ACTIVE_START", "10:00")),
         active_end=parse_hhmm(os.getenv("ACTIVE_END", "00:59")),
         min_steam_n=int(os.getenv("MIN_STEAM_N", "1")),
@@ -164,6 +172,141 @@ def seconds_until_next_notice(now: datetime, target: dt_time, sent_today: bool) 
     if sent_today or now >= candidate:
         candidate = candidate + timedelta(days=1)
     return max(1, int((candidate - now).total_seconds()))
+
+
+def format_duration(seconds: int) -> str:
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, sec = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+
+
+def build_status_message(config: Config, tz: ZoneInfo, now: datetime | None = None) -> str:
+    ts = now or datetime.now(tz)
+    active = is_active_now(ts, config.active_start, config.active_end)
+
+    lines = [
+        "<b>SteamNote Bot Status</b>",
+        f"Time: <b>{ts.strftime('%Y-%m-%d %H:%M:%S')}</b> ({html.escape(config.timezone)})",
+        f"Window: <b>{config.active_start.strftime('%H:%M')}</b> - <b>{config.active_end.strftime('%H:%M')}</b>",
+        f"Poll: every <b>{config.poll_minutes}</b> min",
+    ]
+
+    if active:
+        lines.append("State: <b>ACTIVE</b> (analysis window is open)")
+    else:
+        sleep_seconds = seconds_until_next_start(ts, config.active_start)
+        wake_at = ts + timedelta(seconds=sleep_seconds)
+        lines.append("State: <b>SLEEPING</b> (quiet hours)")
+        lines.append(f"Until next start: <b>{format_duration(sleep_seconds)}</b>")
+        lines.append(f"Next start at: <b>{wake_at.strftime('%Y-%m-%d %H:%M:%S')}</b>")
+
+    if config.send_schedule_notices:
+        start_notice = seconds_until_next_notice(ts, config.analysis_start_notice_time, sent_today=False)
+        end_notice = seconds_until_next_notice(ts, config.analysis_end_notice_time, sent_today=False)
+        lines.append("")
+        lines.append("<b>Notices</b>")
+        lines.append(
+            f"Start ({config.analysis_start_notice_time.strftime('%H:%M')}): <b>{format_duration(start_notice)}</b>"
+        )
+        lines.append(
+            f"End ({config.analysis_end_notice_time.strftime('%H:%M')}): <b>{format_duration(end_notice)}</b>"
+        )
+
+    return "\n".join(lines)
+
+
+def print_status(config: Config, tz: ZoneInfo) -> None:
+    now = datetime.now(tz)
+    active = is_active_now(now, config.active_start, config.active_end)
+
+    print("=" * 56)
+
+
+def is_authorized_chat(chat: dict[str, Any], config: Config) -> bool:
+    target = config.telegram_chat_id.strip()
+    if not target:
+        return False
+
+    if target.startswith("@"):
+        username = str(chat.get("username") or "").strip()
+        return bool(username) and f"@{username}".lower() == target.lower()
+
+    chat_id = chat.get("id")
+    return str(chat_id) == target
+
+
+def process_telegram_commands(config: Config, tz: ZoneInfo, last_update_id: int | None) -> int | None:
+    if not config.enable_telegram_commands:
+        return last_update_id
+
+    url = TELEGRAM_UPDATES_URL.format(token=config.telegram_token)
+    params: dict[str, Any] = {
+        "timeout": 0,
+        "allowed_updates": ["message"],
+    }
+    if last_update_id is not None:
+        params["offset"] = last_update_id + 1
+
+    response = requests.get(url, params=params, timeout=config.request_timeout_seconds)
+    response.raise_for_status()
+    payload = response.json()
+
+    if not payload.get("ok"):
+        raise RuntimeError(f"Telegram getUpdates error: {payload}")
+
+    updates = payload.get("result", [])
+    current_update_id = last_update_id
+
+    for upd in updates:
+        try:
+            update_id = int(upd.get("update_id"))
+            current_update_id = update_id
+        except (TypeError, ValueError):
+            continue
+
+        message = upd.get("message")
+        if not isinstance(message, dict):
+            continue
+
+        chat = message.get("chat")
+        if not isinstance(chat, dict) or not is_authorized_chat(chat, config):
+            continue
+
+        text = str(message.get("text") or "").strip()
+        cmd = text.split()[0].lower() if text else ""
+
+        if cmd == "/status" or cmd.startswith("/status@"):
+            send_telegram(config, build_status_message(config, tz))
+
+    return current_update_id
+    print(f"SteamNote Bot Status | {now.strftime('%Y-%m-%d %H:%M:%S')} ({config.timezone})")
+    print("=" * 56)
+    print(f"Window: {config.active_start.strftime('%H:%M')} - {config.active_end.strftime('%H:%M')}")
+    print(f"Poll interval: every {config.poll_minutes} min")
+
+    if active:
+        print("State: ACTIVE (bot should run analysis now)")
+    else:
+        sleep_seconds = seconds_until_next_start(now, config.active_start)
+        wake_at = now + timedelta(seconds=sleep_seconds)
+        print("State: SLEEPING (quiet hours)")
+        print(f"Time until next start: {format_duration(sleep_seconds)}")
+        print(f"Next start at: {wake_at.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if config.send_schedule_notices:
+        start_notice = seconds_until_next_notice(now, config.analysis_start_notice_time, sent_today=False)
+        end_notice = seconds_until_next_notice(now, config.analysis_end_notice_time, sent_today=False)
+        print("-" * 56)
+        print("Notices:")
+        print(
+            f"Start notice ({config.analysis_start_notice_time.strftime('%H:%M')}): in {format_duration(start_notice)}"
+        )
+        print(
+            f"End notice ({config.analysis_end_notice_time.strftime('%H:%M')}): in {format_duration(end_notice)}"
+        )
+
+    print("=" * 56)
 
 
 def maybe_send_schedule_notices(
@@ -604,8 +747,12 @@ def main() -> None:
             f"'{config.timezone}'. Install tzdata: pip install tzdata"
         ) from exc
 
+    if len(sys.argv) > 1 and sys.argv[1].lower() in {"status", "--status", "-s"}:
+        print_status(config, tz)
+        return
+
     logging.info(
-        "Bot started. Timezone=%s Poll=%s min MockAPI=%s RunOnce=%s CompareWithMarket=%s CompareWithSteamOrder=%s Notices=%s",
+        "Bot started. Timezone=%s Poll=%s min MockAPI=%s RunOnce=%s CompareWithMarket=%s CompareWithSteamOrder=%s Notices=%s Commands=%s",
         config.timezone,
         config.poll_minutes,
         config.mock_api,
@@ -613,11 +760,14 @@ def main() -> None:
         config.compare_with_market,
         config.compare_with_steam_order,
         config.send_schedule_notices,
+        config.enable_telegram_commands,
     )
 
     last_signature: str | None = None
     last_loop_now = datetime.now(tz) - timedelta(seconds=1)
     schedule_sent_dates: dict[str, str] = {}
+    next_analysis_time = datetime.now(tz)
+    last_update_id: int | None = None
 
     while True:
         now = datetime.now(tz)
@@ -625,6 +775,11 @@ def main() -> None:
             maybe_send_schedule_notices(config, last_loop_now, now, schedule_sent_dates)
         except Exception as exc:
             logging.exception("Failed to send schedule notice: %s", exc)
+
+        try:
+            last_update_id = process_telegram_commands(config, tz, last_update_id)
+        except Exception as exc:
+            logging.exception("Failed to process Telegram commands: %s", exc)
 
         if not is_active_now(now, config.active_start, config.active_end):
             sleep_seconds = seconds_until_next_start(now, config.active_start)
@@ -635,9 +790,28 @@ def main() -> None:
                 sleep_to_end_notice = seconds_until_next_notice(now, config.analysis_end_notice_time, end_sent_today)
                 sleep_seconds = min(sleep_seconds, sleep_to_start_notice, sleep_to_end_notice)
 
+            if config.enable_telegram_commands:
+                sleep_seconds = min(sleep_seconds, max(5, config.command_poll_seconds))
+
             logging.info("Quiet hours. Sleeping until active window for %s sec", sleep_seconds)
             last_loop_now = now
             time.sleep(sleep_seconds)
+            continue
+
+        if now < next_analysis_time:
+            sleep_seconds = int((next_analysis_time - now).total_seconds())
+            if config.send_schedule_notices:
+                start_sent_today = schedule_sent_dates.get("analysis_start", "").startswith(now.date().isoformat())
+                end_sent_today = schedule_sent_dates.get("analysis_end", "").startswith(now.date().isoformat())
+                sleep_to_start_notice = seconds_until_next_notice(now, config.analysis_start_notice_time, start_sent_today)
+                sleep_to_end_notice = seconds_until_next_notice(now, config.analysis_end_notice_time, end_sent_today)
+                sleep_seconds = min(sleep_seconds, sleep_to_start_notice, sleep_to_end_notice)
+
+            if config.enable_telegram_commands:
+                sleep_seconds = min(sleep_seconds, max(5, config.command_poll_seconds))
+
+            last_loop_now = now
+            time.sleep(max(1, sleep_seconds))
             continue
 
         try:
@@ -707,10 +881,13 @@ def main() -> None:
                 logging.info("Run once is enabled. Exiting after one cycle.")
                 return
 
+            next_analysis_time = now + timedelta(minutes=max(1, config.poll_minutes))
+
         except Exception as exc:
             logging.exception("Cycle failed: %s", exc)
+            next_analysis_time = now + timedelta(minutes=max(1, config.poll_minutes))
 
-        sleep_seconds = max(60, config.poll_minutes * 60)
+        sleep_seconds = int((next_analysis_time - now).total_seconds())
         if config.send_schedule_notices:
             start_sent_today = schedule_sent_dates.get("analysis_start", "").startswith(now.date().isoformat())
             end_sent_today = schedule_sent_dates.get("analysis_end", "").startswith(now.date().isoformat())
@@ -718,8 +895,11 @@ def main() -> None:
             sleep_to_end_notice = seconds_until_next_notice(now, config.analysis_end_notice_time, end_sent_today)
             sleep_seconds = min(sleep_seconds, sleep_to_start_notice, sleep_to_end_notice)
 
+        if config.enable_telegram_commands:
+            sleep_seconds = min(sleep_seconds, max(5, config.command_poll_seconds))
+
         last_loop_now = now
-        time.sleep(sleep_seconds)
+        time.sleep(max(1, sleep_seconds))
 
 
 if __name__ == "__main__":
