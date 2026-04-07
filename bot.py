@@ -4,9 +4,11 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -47,6 +49,9 @@ class Config:
     analysis_end_notice_text: str
     enable_telegram_commands: bool
     command_poll_seconds: int
+    enable_health_server: bool
+    health_host: str
+    health_port: int | None
     active_start: dt_time
     active_end: dt_time
     min_steam_n: int
@@ -142,6 +147,9 @@ def load_config() -> Config:
         ).strip(),
         enable_telegram_commands=parse_bool(os.getenv("ENABLE_TELEGRAM_COMMANDS", "1")),
         command_poll_seconds=int(os.getenv("COMMAND_POLL_SECONDS", "30")),
+        enable_health_server=parse_bool(os.getenv("ENABLE_HEALTH_SERVER", "1")),
+        health_host=os.getenv("HEALTH_HOST", "0.0.0.0").strip(),
+        health_port=parse_optional_int(os.getenv("HEALTH_PORT") or os.getenv("PORT")),
         active_start=parse_hhmm(os.getenv("ACTIVE_START", "10:00")),
         active_end=parse_hhmm(os.getenv("ACTIVE_END", "00:59")),
         min_steam_n=int(os.getenv("MIN_STEAM_N", "1")),
@@ -221,6 +229,56 @@ def print_status(config: Config, tz: ZoneInfo) -> None:
     active = is_active_now(now, config.active_start, config.active_end)
 
     print("=" * 56)
+    print(f"SteamNote Bot Status | {now.strftime('%Y-%m-%d %H:%M:%S')} ({config.timezone})")
+    print("=" * 56)
+    print(f"Window: {config.active_start.strftime('%H:%M')} - {config.active_end.strftime('%H:%M')}")
+    print(f"Poll interval: every {config.poll_minutes} min")
+
+    if active:
+        print("State: ACTIVE (bot should run analysis now)")
+    else:
+        sleep_seconds = seconds_until_next_start(now, config.active_start)
+        wake_at = now + timedelta(seconds=sleep_seconds)
+        print("State: SLEEPING (quiet hours)")
+        print(f"Time until next start: {format_duration(sleep_seconds)}")
+        print(f"Next start at: {wake_at.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if config.send_schedule_notices:
+        start_notice = seconds_until_next_notice(now, config.analysis_start_notice_time, sent_today=False)
+        end_notice = seconds_until_next_notice(now, config.analysis_end_notice_time, sent_today=False)
+        print("-" * 56)
+        print("Notices:")
+        print(
+            f"Start notice ({config.analysis_start_notice_time.strftime('%H:%M')}): in {format_duration(start_notice)}"
+        )
+        print(
+            f"End notice ({config.analysis_end_notice_time.strftime('%H:%M')}): in {format_duration(end_notice)}"
+        )
+
+    print("=" * 56)
+
+
+def start_health_server(host: str, port: int) -> ThreadingHTTPServer:
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path in {"/", "/health", "/healthz", "/ready"}:
+                body = b'{"status":"ok"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: ANN401
+            return
+
+    server = ThreadingHTTPServer((host, port), HealthHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def is_authorized_chat(chat: dict[str, Any], config: Config) -> bool:
@@ -280,33 +338,6 @@ def process_telegram_commands(config: Config, tz: ZoneInfo, last_update_id: int 
             send_telegram(config, build_status_message(config, tz))
 
     return current_update_id
-    print(f"SteamNote Bot Status | {now.strftime('%Y-%m-%d %H:%M:%S')} ({config.timezone})")
-    print("=" * 56)
-    print(f"Window: {config.active_start.strftime('%H:%M')} - {config.active_end.strftime('%H:%M')}")
-    print(f"Poll interval: every {config.poll_minutes} min")
-
-    if active:
-        print("State: ACTIVE (bot should run analysis now)")
-    else:
-        sleep_seconds = seconds_until_next_start(now, config.active_start)
-        wake_at = now + timedelta(seconds=sleep_seconds)
-        print("State: SLEEPING (quiet hours)")
-        print(f"Time until next start: {format_duration(sleep_seconds)}")
-        print(f"Next start at: {wake_at.strftime('%Y-%m-%d %H:%M:%S')}")
-
-    if config.send_schedule_notices:
-        start_notice = seconds_until_next_notice(now, config.analysis_start_notice_time, sent_today=False)
-        end_notice = seconds_until_next_notice(now, config.analysis_end_notice_time, sent_today=False)
-        print("-" * 56)
-        print("Notices:")
-        print(
-            f"Start notice ({config.analysis_start_notice_time.strftime('%H:%M')}): in {format_duration(start_notice)}"
-        )
-        print(
-            f"End notice ({config.analysis_end_notice_time.strftime('%H:%M')}): in {format_duration(end_notice)}"
-        )
-
-    print("=" * 56)
 
 
 def maybe_send_schedule_notices(
@@ -751,8 +782,16 @@ def main() -> None:
         print_status(config, tz)
         return
 
+    health_server: ThreadingHTTPServer | None = None
+    if config.enable_health_server and isinstance(config.health_port, int):
+        try:
+            health_server = start_health_server(config.health_host, config.health_port)
+            logging.info("Health server listening on %s:%s", config.health_host, config.health_port)
+        except Exception as exc:
+            logging.exception("Failed to start health server on %s:%s: %s", config.health_host, config.health_port, exc)
+
     logging.info(
-        "Bot started. Timezone=%s Poll=%s min MockAPI=%s RunOnce=%s CompareWithMarket=%s CompareWithSteamOrder=%s Notices=%s Commands=%s",
+        "Bot started. Timezone=%s Poll=%s min MockAPI=%s RunOnce=%s CompareWithMarket=%s CompareWithSteamOrder=%s Notices=%s Commands=%s HealthPort=%s",
         config.timezone,
         config.poll_minutes,
         config.mock_api,
@@ -761,6 +800,7 @@ def main() -> None:
         config.compare_with_steam_order,
         config.send_schedule_notices,
         config.enable_telegram_commands,
+        config.health_port if health_server else "off",
     )
 
     last_signature: str | None = None

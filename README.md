@@ -15,6 +15,7 @@ Bot requests data from skins-table.com, filters only knives by symbol `★`, bui
 - Optional filter to keep only knives below MARKET
 - Duplicate protection (won't resend same list every cycle)
 - Telegram command `/status` with pretty bot state output
+- Built-in health endpoint for Render Web Service port checks (`/health`)
 
 ## Setup
 
@@ -50,6 +51,9 @@ Bot requests data from skins-table.com, filters only knives by symbol `★`, bui
 - `ANALYSIS_END_NOTICE_TEXT=Trading session is finished.`
 - `ENABLE_TELEGRAM_COMMANDS=1`
 - `COMMAND_POLL_SECONDS=30`
+- `ENABLE_HEALTH_SERVER=1`
+- `HEALTH_HOST=0.0.0.0`
+- `HEALTH_PORT=` (auto uses `PORT` on Render)
 - `MIN_STEAM_N=1`
 - `MIN_STEAM_ORDER_N=1`
 - `SITE=STEAM`
@@ -121,6 +125,10 @@ This project is configured for Render Worker deployment via Docker (`render.yaml
    - `SKINS_TABLE_API_KEY`
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID`
+
+If you deploy as **Web Service**, the bot now auto-binds HTTP health endpoint to Render `PORT` and responds on `/health`.
+
+If you deploy as **Worker**, no incoming port is required.
 
 ## Docker local run
 
