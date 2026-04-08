@@ -15,7 +15,7 @@ services:
       - key: TIMEZONE
         value: Europe/Chisinau
       - key: POLL_MINUTES
-        value: "10"
+        value: "60"
       - key: APP_ID
         value: "730"
       - key: SITE
@@ -33,9 +33,9 @@ services:
       - key: COMPARE_WITH_MARKET
         value: "0"
       - key: ACTIVE_START
-        value: "10:00"
+        value: "00:00"
       - key: ACTIVE_END
-        value: "00:59"
+        value: "23:59"
       - key: SEND_SCHEDULE_NOTICES
         value: "1"
       - key: ANALYSIS_START_NOTICE_TIME

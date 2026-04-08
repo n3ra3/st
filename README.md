@@ -168,6 +168,15 @@ Requirements:
 - Bot must be in the same chat as `TELEGRAM_CHAT_ID`
 - Bot needs permission to read messages in that chat
 
+## Run 24/7 (never enter quiet hours)
+
+If you want continuous analysis with no night pause, set:
+
+- `ACTIVE_START=00:00`
+- `ACTIVE_END=23:59`
+
+In this mode, self-ping is not required for bot logic. The process keeps running normally.
+
 ### Main Render env vars
 
 - `TIMEZONE=Europe/Chisinau`
