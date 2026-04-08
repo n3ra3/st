@@ -267,7 +267,7 @@ def print_status(config: Config, tz: ZoneInfo) -> None:
 def start_health_server(host: str, port: int) -> ThreadingHTTPServer:
     class HealthHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            if self.path in {"/", "/health", "/healthz", "/ready"}:
+            if self.path in {"/", "/health", "/healthz", "/ready", "/ping"}:
                 body = b'{"status":"ok"}'
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
