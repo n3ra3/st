@@ -33,9 +33,9 @@ services:
       - key: COMPARE_WITH_MARKET
         value: "0"
       - key: ACTIVE_START
-        value: "00:00"
+        value: "10:00"
       - key: ACTIVE_END
-        value: "23:59"
+        value: "00:59"
       - key: SEND_SCHEDULE_NOTICES
         value: "1"
       - key: ANALYSIS_START_NOTICE_TIME
