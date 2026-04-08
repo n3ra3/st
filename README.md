@@ -115,20 +115,29 @@ Use the needed group id in `TELEGRAM_CHAT_ID` inside `.env`.
 
 ## Deploy on Render
 
-This project is configured for Render Worker deployment via Docker (`render.yaml` + `Dockerfile`).
+This project is configured for Render Web Service deployment via Docker (`render.yaml` + `Dockerfile`).
 
 1. Push project to GitHub.
 2. In Render, choose **New +** -> **Blueprint** and connect the repository.
-3. Render will detect `render.yaml` and create a worker service.
+3. Render will detect `render.yaml` and create a web service.
 4. Set required secret env vars in Render dashboard:
 
    - `SKINS_TABLE_API_KEY`
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID`
 
-If you deploy as **Web Service**, the bot now auto-binds HTTP health endpoint to Render `PORT` and responds on `/health`.
+Web Service behavior:
 
-If you deploy as **Worker**, no incoming port is required.
+- Bot auto-binds HTTP endpoint to Render `PORT`
+- Health check endpoint: `/health`
+- Optional keep-alive self-ping can call your own public URL
+
+Recommended env vars for Web Service keep-alive:
+
+- `ENABLE_HEALTH_SERVER=1`
+- `ENABLE_SELF_PING=1`
+- `SELF_PING_URL=https://your-service-name.onrender.com/health`
+- `SELF_PING_INTERVAL_SECONDS=300`
 
 ## Docker local run
 

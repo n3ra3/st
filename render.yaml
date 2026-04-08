@@ -1,9 +1,10 @@
 services:
-  - type: worker
+  - type: web
     name: steamnote-bot
     env: docker
     plan: starter
     dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: SKINS_TABLE_API_KEY

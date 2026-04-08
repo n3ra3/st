@@ -52,6 +52,9 @@ class Config:
     enable_health_server: bool
     health_host: str
     health_port: int | None
+    enable_self_ping: bool
+    self_ping_url: str
+    self_ping_interval_seconds: int
     active_start: dt_time
     active_end: dt_time
     min_steam_n: int
@@ -150,6 +153,9 @@ def load_config() -> Config:
         enable_health_server=parse_bool(os.getenv("ENABLE_HEALTH_SERVER", "1")),
         health_host=os.getenv("HEALTH_HOST", "0.0.0.0").strip(),
         health_port=parse_optional_int(os.getenv("HEALTH_PORT") or os.getenv("PORT")),
+        enable_self_ping=parse_bool(os.getenv("ENABLE_SELF_PING", "0")),
+        self_ping_url=os.getenv("SELF_PING_URL", "").strip(),
+        self_ping_interval_seconds=int(os.getenv("SELF_PING_INTERVAL_SECONDS", "300")),
         active_start=parse_hhmm(os.getenv("ACTIVE_START", "10:00")),
         active_end=parse_hhmm(os.getenv("ACTIVE_END", "00:59")),
         min_steam_n=int(os.getenv("MIN_STEAM_N", "1")),
@@ -279,6 +285,25 @@ def start_health_server(host: str, port: int) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), HealthHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+def start_self_ping(config: Config) -> None:
+    if not config.enable_self_ping or not config.self_ping_url:
+        return
+
+    interval = max(30, config.self_ping_interval_seconds)
+    url = config.self_ping_url
+
+    def loop() -> None:
+        while True:
+            try:
+                requests.get(url, timeout=max(5, config.request_timeout_seconds))
+            except Exception as exc:
+                logging.warning("Self-ping failed: %s", exc)
+            time.sleep(interval)
+
+    threading.Thread(target=loop, daemon=True).start()
+    logging.info("Self-ping enabled: %s every %s sec", url, interval)
 
 
 def is_authorized_chat(chat: dict[str, Any], config: Config) -> bool:
@@ -790,8 +815,10 @@ def main() -> None:
         except Exception as exc:
             logging.exception("Failed to start health server on %s:%s: %s", config.health_host, config.health_port, exc)
 
+    start_self_ping(config)
+
     logging.info(
-        "Bot started. Timezone=%s Poll=%s min MockAPI=%s RunOnce=%s CompareWithMarket=%s CompareWithSteamOrder=%s Notices=%s Commands=%s HealthPort=%s",
+        "Bot started. Timezone=%s Poll=%s min MockAPI=%s RunOnce=%s CompareWithMarket=%s CompareWithSteamOrder=%s Notices=%s Commands=%s HealthPort=%s SelfPing=%s",
         config.timezone,
         config.poll_minutes,
         config.mock_api,
@@ -801,6 +828,7 @@ def main() -> None:
         config.send_schedule_notices,
         config.enable_telegram_commands,
         config.health_port if health_server else "off",
+        "on" if config.enable_self_ping and config.self_ping_url else "off",
     )
 
     last_signature: str | None = None
