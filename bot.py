@@ -42,6 +42,7 @@ class Config:
     steam_order_site: str
     compare_with_pirateswap: bool
     pirateswap_site: str
+    pirateswap_sell_fee_pct: float
     send_schedule_notices: bool
     analysis_start_notice_time: dt_time
     analysis_end_notice_time: dt_time
@@ -137,6 +138,7 @@ def load_config() -> Config:
         steam_order_site=os.getenv("STEAM_ORDER_SITE", "STEAM ORDER").strip(),
         compare_with_pirateswap=parse_bool(os.getenv("COMPARE_WITH_PIRATESWAP", "1")),
         pirateswap_site=os.getenv("PIRATESWAP_SITE", "PIRATESWAP").strip(),
+        pirateswap_sell_fee_pct=float(os.getenv("PIRATESWAP_SELL_FEE_PCT", "10")),
         send_schedule_notices=parse_bool(os.getenv("SEND_SCHEDULE_NOTICES", "1")),
         analysis_start_notice_time=parse_hhmm(os.getenv("ANALYSIS_START_NOTICE_TIME", "09:59")),
         analysis_end_notice_time=parse_hhmm(os.getenv("ANALYSIS_END_NOTICE_TIME", "00:59")),
@@ -535,6 +537,7 @@ def select_knives(items: dict[str, Any], config: Config) -> list[dict[str, Any]]
                 "below_steam_order_abs": None,
                 "below_steam_order_pct": None,
                 "pirateswap_price": None,
+                "pirateswap_net_after_fee": None,
                 "steam_vs_pirateswap_abs": None,
                 "steam_vs_pirateswap_pct": None,
                 "market_price": None,
@@ -619,6 +622,7 @@ def build_price_map(items: dict[str, Any]) -> dict[str, float]:
 def apply_pirateswap_diff(
     knives: list[dict[str, Any]],
     pirateswap_prices: dict[str, float],
+    sell_fee_pct: float,
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
 
@@ -627,9 +631,12 @@ def apply_pirateswap_diff(
         pirateswap_price = pirateswap_prices.get(knife_copy["name"])
 
         if isinstance(pirateswap_price, (int, float)) and pirateswap_price > 0:
-            diff_abs = pirateswap_price - knife_copy["price"]
-            diff_pct = (diff_abs / pirateswap_price) * 100.0
+            safe_fee_pct = min(max(float(sell_fee_pct), 0.0), 99.0)
+            net_after_fee = pirateswap_price * (1.0 - safe_fee_pct / 100.0)
+            diff_abs = net_after_fee - knife_copy["price"]
+            diff_pct = (diff_abs / net_after_fee) * 100.0 if net_after_fee > 0 else 0.0
             knife_copy["pirateswap_price"] = pirateswap_price
+            knife_copy["pirateswap_net_after_fee"] = net_after_fee
             knife_copy["steam_vs_pirateswap_abs"] = diff_abs
             knife_copy["steam_vs_pirateswap_pct"] = diff_pct
 
@@ -701,7 +708,12 @@ def chunk_text(lines: list[str], limit: int = 3500) -> list[str]:
     return chunks
 
 
-def build_messages(knives: list[dict[str, Any]], now: datetime, requests_left: int | None) -> list[str]:
+def build_messages(
+    knives: list[dict[str, Any]],
+    now: datetime,
+    requests_left: int | None,
+    pirateswap_sell_fee_pct: float,
+) -> list[str]:
     ts = now.strftime("%Y-%m-%d %H:%M")
     header = f"Skins-Table knives update ({ts})"
     if requests_left is not None:
@@ -718,6 +730,7 @@ def build_messages(knives: list[dict[str, Any]], now: datetime, requests_left: i
         below_market_abs = item.get("below_market_abs")
         below_market_pct = item.get("below_market_pct")
         pirateswap_price = item.get("pirateswap_price")
+        pirateswap_net_after_fee = item.get("pirateswap_net_after_fee")
         steam_vs_pirateswap_abs = item.get("steam_vs_pirateswap_abs")
         steam_vs_pirateswap_pct = item.get("steam_vs_pirateswap_pct")
         steam_order = item.get("steam_order")
@@ -748,11 +761,18 @@ def build_messages(knives: list[dict[str, Any]], now: datetime, requests_left: i
                     )
 
         if isinstance(pirateswap_price, (int, float)):
-            pirateswap_line = f"PirateSwap: <b>${pirateswap_price:.2f}</b>"
+            if isinstance(pirateswap_net_after_fee, (int, float)):
+                pirateswap_line = (
+                    f"PirateSwap: (-{pirateswap_sell_fee_pct:.1f}% ≈ <b>${pirateswap_net_after_fee:.2f}</b>) "
+                    f"<b>${pirateswap_price:.2f}</b>"
+                )
+            else:
+                pirateswap_line = f"PirateSwap: <b>${pirateswap_price:.2f}</b>"
+
             if isinstance(steam_vs_pirateswap_abs, (int, float)) and isinstance(steam_vs_pirateswap_pct, (int, float)):
                 sign = "+" if steam_vs_pirateswap_abs >= 0 else "-"
                 pirateswap_line += (
-                    f" | 🟠 Steam vs PirateSwap: <b>{sign}${abs(steam_vs_pirateswap_abs):.2f}</b> "
+                    f" | 🟠 Steam vs PirateSwap net: <b>{sign}${abs(steam_vs_pirateswap_abs):.2f}</b> "
                     f"({abs(steam_vs_pirateswap_pct):.2f}%)"
                 )
             card_lines.append(pirateswap_line)
@@ -917,7 +937,7 @@ def main() -> None:
                     requests_left = pirateswap_requests_left
 
                 pirateswap_prices = build_price_map(pirateswap_items)
-                knives = apply_pirateswap_diff(knives, pirateswap_prices)
+                knives = apply_pirateswap_diff(knives, pirateswap_prices, config.pirateswap_sell_fee_pct)
 
             if config.compare_with_market and config.market_site.upper() != config.site.upper():
                 if config.mock_api:
@@ -937,7 +957,7 @@ def main() -> None:
             current_signature = make_signature(knives)
 
             if current_signature != last_signature:
-                messages = build_messages(knives, now, requests_left)
+                messages = build_messages(knives, now, requests_left, config.pirateswap_sell_fee_pct)
                 for msg in messages:
                     send_telegram(config, msg)
                 last_signature = current_signature

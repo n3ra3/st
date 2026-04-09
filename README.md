@@ -10,7 +10,7 @@ Bot requests data from skins-table.com, filters only knives by symbol `★`, bui
 - Knife filter by symbol `★`
 - Optional price range filters
 - Steam order comparison: uses second `/items` request (`SITE=STEAM` vs `STEAM_ORDER_SITE=STEAM ORDER`) and shows spread in $ and %
-- PirateSwap comparison: optional extra comparison (`SITE=STEAM` vs `PIRATESWAP_SITE=PIRATESWAP`) with spread in $ and %
+- PirateSwap comparison: optional extra comparison (`SITE=STEAM` vs `PIRATESWAP_SITE=PIRATESWAP`) with spread in $ and % from estimated net sale price (after fee)
 - MARKET comparison: optional extra comparison in $ and %
 - Optional filter to keep only knives below MARKET
 - Duplicate protection (won't resend same list every cycle)
@@ -62,6 +62,7 @@ Bot requests data from skins-table.com, filters only knives by symbol `★`, bui
 - `STEAM_ORDER_SITE=STEAM ORDER`
 - `COMPARE_WITH_PIRATESWAP=1`
 - `PIRATESWAP_SITE=PIRATESWAP`
+- `PIRATESWAP_SELL_FEE_PCT=10` (used to estimate net sale price)
 - `COMPARE_WITH_MARKET=1`
 - `MARKET_SITE=MARKET`
 - `ONLY_BELOW_MARKET=1`
