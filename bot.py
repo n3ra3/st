@@ -526,11 +526,19 @@ def select_knives(items: dict[str, Any], config: Config) -> list[dict[str, Any]]
         if steam_n < config.min_steam_n:
             continue
 
+        float_value: float | None = None
+        try:
+            if raw.get("f") is not None:
+                float_value = float(raw.get("f"))
+        except (TypeError, ValueError):
+            float_value = None
+
         knives.append(
             {
                 "name": name,
                 "price": price,
                 "steam_n": steam_n,
+                "float_value": float_value,
                 "steam_link": build_steam_link(config.app_id, name),
                 "steam_order": None,
                 "steam_order_n": None,
@@ -715,7 +723,7 @@ def build_messages(
     pirateswap_sell_fee_pct: float,
 ) -> list[str]:
     ts = now.strftime("%Y-%m-%d %H:%M")
-    header = f"Skins-Table knives update ({ts})"
+    header = f"Knives update ({ts})"
     if requests_left is not None:
         header += f" | requests left: {requests_left}"
 
@@ -735,6 +743,7 @@ def build_messages(
         steam_vs_pirateswap_pct = item.get("steam_vs_pirateswap_pct")
         steam_order = item.get("steam_order")
         steam_n = item.get("steam_n")
+        float_value = item.get("float_value")
         steam_order_n = item.get("steam_order_n")
         below_steam_order_abs = item.get("below_steam_order_abs")
         below_steam_order_pct = item.get("below_steam_order_pct")
@@ -743,8 +752,17 @@ def build_messages(
 
         card_lines = [
             f"<b>{idx}. {safe_name}</b>",
-            f"Steam: <b>${item['price']:.2f}</b> | N: <b>{steam_n_text}</b> | <a href=\"{safe_link}\">Open</a>",
         ]
+
+        if isinstance(float_value, (int, float)):
+            card_lines.append(f"Float: <b>{float_value:.9f}</b>")
+
+        card_lines.extend(
+            [
+                f"Steam: <b>${item['price']:.2f}</b> | N: <b>{steam_n_text}</b>",
+                f"<a href=\"{safe_link}\">Open</a>",
+            ]
+        )
 
         if isinstance(steam_order, (int, float)):
             order_n_text = str(steam_order_n) if isinstance(steam_order_n, int) else "-"
@@ -763,19 +781,19 @@ def build_messages(
         if isinstance(pirateswap_price, (int, float)):
             if isinstance(pirateswap_net_after_fee, (int, float)):
                 pirateswap_line = (
-                    f"PirateSwap: (-{pirateswap_sell_fee_pct:.1f}% ≈ <b>${pirateswap_net_after_fee:.2f}</b>) "
+                    f"🟠 PirateSwap: (-{pirateswap_sell_fee_pct:.1f}% ≈ <b>${pirateswap_net_after_fee:.2f}</b>) "
                     f"<b>${pirateswap_price:.2f}</b>"
                 )
             else:
-                pirateswap_line = f"PirateSwap: <b>${pirateswap_price:.2f}</b>"
+                pirateswap_line = f"🟠 PirateSwap: <b>${pirateswap_price:.2f}</b>"
 
+            card_lines.append(pirateswap_line)
             if isinstance(steam_vs_pirateswap_abs, (int, float)) and isinstance(steam_vs_pirateswap_pct, (int, float)):
                 sign = "+" if steam_vs_pirateswap_abs >= 0 else "-"
-                pirateswap_line += (
-                    f" | 🟠 Steam vs PirateSwap net: <b>{sign}${abs(steam_vs_pirateswap_abs):.2f}</b> "
+                card_lines.append(
+                    f"Steam vs PirateSwap: <b>{sign}${abs(steam_vs_pirateswap_abs):.2f}</b> "
                     f"({abs(steam_vs_pirateswap_pct):.2f}%)"
                 )
-            card_lines.append(pirateswap_line)
 
         if isinstance(market_price, (int, float)):
             market_line = f"Market: <b>${market_price:.2f}</b>"
